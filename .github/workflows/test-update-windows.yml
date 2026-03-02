@@ -93,6 +93,7 @@ jobs:
           Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
           azd config set alpha.update on
           $output = azd update --channel nightly 2>&1 | Out-String
+          $global:LASTEXITCODE = 0
           echo $output
           if ($output -match "invalid channel") { echo "PASS" } else { echo "FAIL"; exit 1 }
           echo "--- A7 DONE ---"
@@ -138,6 +139,7 @@ jobs:
         run: |
           azd config set alpha.update on
           $output = azd update 2>&1 | Out-String
+          $global:LASTEXITCODE = 0
           echo $output
           if ($output -match "not supported in CI/CD") { echo "PASS" } else { echo "FAIL"; exit 1 }
           echo "--- A10 DONE ---"
@@ -324,6 +326,7 @@ jobs:
           echo "Created .installed-by.txt with 'winget'"
 
           $output = azd update 2>&1 | Out-String
+          $global:LASTEXITCODE = 0
           echo $output
 
           # Cleanup marker
@@ -373,6 +376,7 @@ jobs:
           echo "winget" | Out-File -NoNewline "$env:USERPROFILE\azd-test\.installed-by.txt"
 
           $output = azd update --channel daily 2>&1 | Out-String
+          $global:LASTEXITCODE = 0
           echo $output
 
           if ($output -match "daily builds aren't available via winget") { echo "PASS" } else { echo "FAIL"; exit 1 }
@@ -402,6 +406,7 @@ jobs:
           echo "Created .installed-by.txt with 'choco'"
 
           $output = azd update 2>&1 | Out-String
+          $global:LASTEXITCODE = 0
           echo $output
 
           # Cleanup marker
