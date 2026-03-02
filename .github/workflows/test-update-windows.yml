@@ -8,6 +8,8 @@ jobs:
     runs-on: windows-latest
     env:
       CI: ""
+      GITHUB_ACTIONS: ""
+      TF_BUILD: ""
     steps:
       - uses: actions/checkout@v4
 
