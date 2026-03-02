@@ -6,6 +6,8 @@ on:
 jobs:
   test-update-windows:
     runs-on: windows-latest
+    env:
+      CI: ""
     steps:
       - uses: actions/checkout@v4
 
