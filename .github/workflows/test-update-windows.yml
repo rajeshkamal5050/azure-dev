@@ -3,9 +3,16 @@ name: "Test: azd update on Windows"
 on:
   workflow_dispatch:
 
+env:
+  FAKE_VERSION: "1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)"
+  LATEST_STABLE: "1.23.7"
+
 jobs:
   test-update-windows:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
 
@@ -13,234 +20,395 @@ jobs:
         with:
           go-version: "1.25"
 
-      - name: Build azd as fake old version
+      - name: Build azd test binary
         working-directory: cli/azd
         run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=${{ env.FAKE_VERSION }}'" -o azd.exe .
           New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
           echo "$env:USERPROFILE\azd-test" | Out-File -Append $env:GITHUB_PATH
 
-      - name: A1 - Version check shows update available
-        run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
-          azd config set update.autoUpdate off
-          azd version
-          echo "--- Expected: WARNING about newer stable version ---"
+      # ── Helper: unset CI env vars (used in most steps) ──
+      # GitHub Actions sets GITHUB_ACTIONS=true and CI=true which triggers
+      # azd's CI detection (IsRunningOnCI). We remove them so azd update works.
+      # A10 is the exception — it needs them set.
 
-      - name: A2 - azd update (stable channel)
+      # ═══════════════════════════════════════════════════
+      # A1 — Stable update available
+      # Build: 1.23.5 | Run: azd update | Expected: downloads MSI, installs
+      # ═══════════════════════════════════════════════════
+      - name: "A1: Stable update available"
         run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
-          azd config set alpha.update on
-          azd update
-          azd version
-          echo "--- Expected: updated to latest stable ---"
-
-      - name: Rebuild fake old version for remaining tests
-        working-directory: cli/azd
-        run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
-          New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
-          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
-
-      - name: A3 - azd update already up to date
-        run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
           azd config set alpha.update on
           azd config set update.autoUpdate off
-          # First update to latest
+          Remove-Item "$env:USERPROFILE\.azd\update-check.json" -ErrorAction SilentlyContinue
+          Remove-Item "$env:USERPROFILE\.azd\staging" -Recurse -Force -ErrorAction SilentlyContinue
           azd update
-          # Then try again
-          azd update
-          echo "--- Expected: azd is up to date ---"
+          echo "--- A1 DONE ---"
 
-      - name: Rebuild fake old version
+      # ═══════════════════════════════════════════════════
+      # A2 — Already up to date
+      # Build: as latest stable | Run: azd update | Expected: "up to date"
+      # ═══════════════════════════════════════════════════
+      - name: "A2: Build as latest stable"
         working-directory: cli/azd
         run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
-          New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=${{ env.LATEST_STABLE }} (commit 302d696d41e2029a04e86ecf642da5a0c1c441c0)'" -o azd.exe .
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
 
-      - name: A7 - Config auto-update on
+      - name: "A2: Already up to date"
         run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
           azd config set alpha.update on
-          azd update --auto-update on
-          azd config list
-          echo "--- Expected: update.autoUpdate = on ---"
-
-      - name: A8 - Config auto-update off
-        run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
-          azd update --auto-update off
-          azd config list
-          echo "--- Expected: update.autoUpdate = off ---"
-
-      - name: A10 - Alpha auto-enable
-        run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
-          azd config unset alpha.update 2>$null
+          Remove-Item "$env:USERPROFILE\.azd\update-check.json" -ErrorAction SilentlyContinue
           azd update
-          azd config list
-          echo "--- Expected: alpha.update auto-enabled, notice shown ---"
+          echo "--- A2 DONE ---"
 
-      - name: A11 - Channel validation
+      # ═══════════════════════════════════════════════════
+      # A3 — Daily channel update
+      # Build: old daily | channel=daily | Expected: downloads latest daily
+      # ═══════════════════════════════════════════════════
+      - name: "A3: Build as old daily"
+        working-directory: cli/azd
         run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
-          azd config set alpha.update on
-          azd update --channel invalid 2>&1 || true
-          echo "--- Expected: error about invalid channel ---"
-
-      - name: C1 - Auto-stage and apply
-        run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
-          # Rebuild fake old version
-          cd cli/azd
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
-          New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.5.0-beta.1-daily.3000000 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
-          cd ../..
 
-          # Enable auto-update, clean staging
+      - name: "A3: Daily channel update"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
+          azd config set alpha.update on
+          azd config set updates.channel daily
+          Remove-Item "$env:USERPROFILE\.azd\update-check.json" -ErrorAction SilentlyContinue
+          azd update
+          echo "--- A3 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # A7 — Invalid channel
+      # Expected: error with valid options
+      # ═══════════════════════════════════════════════════
+      - name: "A7: Invalid channel"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
+          azd config set alpha.update on
+          $output = azd update --channel nightly 2>&1 | Out-String
+          $global:LASTEXITCODE = 0
+          echo $output
+          if ($output -match "invalid channel") { echo "PASS" } else { echo "FAIL"; exit 1 }
+          echo "--- A7 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # A8 — Config-only flags (no download)
+      # Expected: saves config, no download triggered
+      # ═══════════════════════════════════════════════════
+      - name: "A8: Rebuild fake version"
+        working-directory: cli/azd
+        run: |
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=${{ env.FAKE_VERSION }}'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+
+      - name: "A8: Config-only flags"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
+          azd config set alpha.update on
+          azd config set updates.channel stable
+          azd update --auto-update on --check-interval-hours 8
+          azd config get updates
+          echo "--- A8 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # A9 — Help text
+      # Expected: shows all flags
+      # ═══════════════════════════════════════════════════
+      - name: "A9: Help text"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
+          azd config set alpha.update on
+          azd update --help
+          echo "--- A9 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # A10 — CI detection
+      # DO NOT unset CI vars. Expected: "not supported in CI/CD"
+      # ═══════════════════════════════════════════════════
+      - name: "A10: CI detection"
+        env:
+          CI: "true"
+          GITHUB_ACTIONS: "true"
+        run: |
+          azd config set alpha.update on
+          $output = azd update 2>&1 | Out-String
+          $global:LASTEXITCODE = 0
+          echo $output
+          if ($output -match "not supported in CI/CD") { echo "PASS" } else { echo "FAIL"; exit 1 }
+          echo "--- A10 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # A11 — Feature toggle off → auto-enable
+      # Expected: auto-enables alpha and proceeds
+      # ═══════════════════════════════════════════════════
+      - name: "A11: Feature toggle off"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
+          azd config unset alpha.update
+          azd update 2>&1 | Tee-Object -Variable output
+          echo ""
+          echo "Checking alpha.update was auto-enabled:"
+          azd config get alpha.update
+          echo "--- A11 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # C1 — Auto-stage and apply
+      # Build: old | auto-update=on | Expected: stages in background, applies on next run
+      # ═══════════════════════════════════════════════════
+      - name: "C1: Rebuild fake version"
+        working-directory: cli/azd
+        run: |
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=${{ env.FAKE_VERSION }}'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+
+      - name: "C1: Auto-stage and apply"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
           azd config set alpha.update on
           azd config set update.autoUpdate on
-          Remove-Item -Recurse -Force "$env:USERPROFILE\.azd\staging" -ErrorAction SilentlyContinue
+          Remove-Item "$env:USERPROFILE\.azd\staging" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "$env:USERPROFILE\.azd\update-check.json" -ErrorAction SilentlyContinue
+          Remove-Item "$env:USERPROFILE\.azd\update-applied.txt" -ErrorAction SilentlyContinue
 
-          # Trigger background staging
+          echo "Step 1: Trigger background staging"
           azd version
-          Start-Sleep -Seconds 15
 
-          # Check if staging happened
-          if (Test-Path "$env:USERPROFILE\.azd\staging\azd.exe") {
-            echo "Staging: OK"
-            Get-Item "$env:USERPROFILE\.azd\staging\azd.exe" | Select-Object Length
-          } else {
-            echo "Staging: NOT FOUND (may need more time)"
-          }
+          echo "Step 2: Wait 30s for staging to complete"
+          Start-Sleep -Seconds 30
 
-          # Apply on next run
-          azd version
-          echo "--- Expected: updated version after apply ---"
-
-      - name: C3 - Corrupt staging recovery
-        run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
-          # Rebuild fake old version
-          cd cli/azd
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
-          New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
-          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
-          cd ../..
-
-          azd config set alpha.update on
-          azd config set update.autoUpdate on
-
-          # Create corrupt staged binary
-          New-Item -ItemType Directory -Force "$env:USERPROFILE\.azd\staging"
-          echo "corrupt" | Out-File "$env:USERPROFILE\.azd\staging\azd.exe"
-
-          # Should detect corruption and re-stage
-          azd version
-          Start-Sleep -Seconds 15
+          echo "Step 3: Check staging"
           if (Test-Path "$env:USERPROFILE\.azd\staging\azd.exe") {
             $size = (Get-Item "$env:USERPROFILE\.azd\staging\azd.exe").Length
-            echo "Re-staged binary size: $size bytes"
+            echo "Staging: OK ($size bytes)"
+          } else {
+            echo "Staging: NOT FOUND after 30s"
           }
-          echo "--- Expected: corrupt file detected, valid binary re-staged ---"
 
-      - name: C4 - Auto-update disabled skips staging
+          echo "Step 4: Apply on next run"
+          azd version
+          echo "--- C1 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # C3 — Truncated staged binary protection
+      # Expected: detects corrupt file, re-stages valid binary
+      # ═══════════════════════════════════════════════════
+      - name: "C3: Rebuild fake version"
+        working-directory: cli/azd
         run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=${{ env.FAKE_VERSION }}'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+
+      - name: "C3: Truncated staged binary"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
+          azd config set alpha.update on
+          azd config set update.autoUpdate on
+
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\.azd\staging" | Out-Null
+          echo "corrupt" | Out-File "$env:USERPROFILE\.azd\staging\azd.exe"
+          $corruptSize = (Get-Item "$env:USERPROFILE\.azd\staging\azd.exe").Length
+          echo "Corrupt staged binary size: $corruptSize bytes"
+
+          azd version
+
+          echo "Waiting 20s for re-staging..."
+          Start-Sleep -Seconds 20
+
+          if (Test-Path "$env:USERPROFILE\.azd\staging\azd.exe") {
+            $newSize = (Get-Item "$env:USERPROFILE\.azd\staging\azd.exe").Length
+            echo "Re-staged binary size: $newSize bytes"
+            if ($newSize -gt 1000000) { echo "PASS: valid binary re-staged" } else { echo "FAIL: still corrupt" }
+          } else {
+            echo "Staging file removed (will re-stage on next run)"
+          }
+          echo "--- C3 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # C4 — Auto-update disabled skips staging
+      # Expected: no staging directory created
+      # ═══════════════════════════════════════════════════
+      - name: "C4: Rebuild fake version"
+        working-directory: cli/azd
+        run: |
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=${{ env.FAKE_VERSION }}'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+
+      - name: "C4: Auto-update disabled"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
           azd config set alpha.update on
           azd config set update.autoUpdate off
-          Remove-Item -Recurse -Force "$env:USERPROFILE\.azd\staging" -ErrorAction SilentlyContinue
+          Remove-Item "$env:USERPROFILE\.azd\staging" -Recurse -Force -ErrorAction SilentlyContinue
+
           azd version
           Start-Sleep -Seconds 5
+
           if (Test-Path "$env:USERPROFILE\.azd\staging") {
             echo "FAIL: staging directory should not exist"
+            exit 1
           } else {
             echo "PASS: no staging when auto-update is off"
           }
+          echo "--- C4 DONE ---"
 
-      - name: D1 - Package manager detection
+      # ═══════════════════════════════════════════════════
+      # D1 — Combined flags persist
+      # Expected: all values saved correctly
+      # ═══════════════════════════════════════════════════
+      - name: "D1: Combined flags persist"
         run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
           azd config set alpha.update on
-          # On GH runners, azd is not installed via winget/choco, so this tests the non-pkg-manager path
-          echo "Install method detection:"
-          azd version --debug 2>&1 | Select-String -Pattern "package.manager|install" || echo "(no package manager detected)"
-          echo "--- Expected: no package manager detected on GH runner ---"
+          azd config set updates.channel stable
+          azd update --auto-update on --check-interval-hours 2
+          echo "Config after combined flags:"
+          azd config get updates
+          echo "--- D1 DONE ---"
 
-      - name: D2 - Windows MSI/Authenticode info
+      # ═══════════════════════════════════════════════════
+      # D2 — Authenticode signature verification
+      # Expected: MSI has valid Microsoft Authenticode signature
+      # ═══════════════════════════════════════════════════
+      - name: "D2: Rebuild fake version"
+        working-directory: cli/azd
         run: |
-          Remove-Item env:CI -ErrorAction SilentlyContinue
-          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
-          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
-          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
-          # Check if the downloaded binary would be signed
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=${{ env.FAKE_VERSION }}'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+
+      - name: "D2: Authenticode signature"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
           azd config set alpha.update on
           azd config set update.autoUpdate on
-          Remove-Item -Recurse -Force "$env:USERPROFILE\.azd\staging" -ErrorAction SilentlyContinue
+          Remove-Item "$env:USERPROFILE\.azd\staging" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "$env:USERPROFILE\.azd\update-check.json" -ErrorAction SilentlyContinue
 
-          # Trigger staging
-          cd cli/azd
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
-          New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
-          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
-          cd ../..
-
+          echo "Triggering staging to download production binary..."
           azd version
-          Start-Sleep -Seconds 15
+          Start-Sleep -Seconds 30
 
           if (Test-Path "$env:USERPROFILE\.azd\staging\azd.exe") {
             echo "Checking Authenticode signature on staged binary:"
-            Get-AuthenticodeSignature "$env:USERPROFILE\.azd\staging\azd.exe" | Format-List
+            $sig = Get-AuthenticodeSignature "$env:USERPROFILE\.azd\staging\azd.exe"
+            echo "Status: $($sig.Status)"
+            echo "Signer: $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -eq "Valid") { echo "PASS: valid signature" } else { echo "INFO: $($sig.Status)" }
           } else {
-            echo "No staged binary to check"
+            echo "Staging not complete in 30s — skipping signature check"
           }
-          echo "--- Expected: Valid Authenticode signature from Microsoft ---"
+          echo "--- D2 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # W1 — Winget update (delegates to winget)
+      # Simulated: create .installed-by.txt with "winget"
+      # Expected: "Updating azd via winget..." → runs winget upgrade
+      # ═══════════════════════════════════════════════════
+      - name: "W1: Rebuild fake version"
+        working-directory: cli/azd
+        run: |
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=${{ env.FAKE_VERSION }}'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+
+      - name: "W1: Winget update delegation"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
+          azd config set alpha.update on
+
+          # Simulate winget install by creating marker file
+          echo "winget" | Out-File -NoNewline "$env:USERPROFILE\azd-test\.installed-by.txt"
+          echo "Created .installed-by.txt with 'winget'"
+
+          $output = azd update 2>&1 | Out-String
+          $global:LASTEXITCODE = 0
+          echo $output
+
+          # Cleanup marker
+          Remove-Item "$env:USERPROFILE\azd-test\.installed-by.txt" -ErrorAction SilentlyContinue
+          echo "--- W1 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # W2 — Script install update (MSI download)
+      # Same as A1 but explicit: non-pkg-manager path → MSI download
+      # Expected: Downloads MSI, runs msiexec
+      # ═══════════════════════════════════════════════════
+      - name: "W2: Rebuild fake version"
+        working-directory: cli/azd
+        run: |
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=${{ env.FAKE_VERSION }}'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+
+      - name: "W2: Script install MSI update"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
+          azd config set alpha.update on
+          azd config set update.autoUpdate off
+
+          # Ensure no .installed-by.txt (simulates script install / dev binary)
+          Remove-Item "$env:USERPROFILE\azd-test\.installed-by.txt" -ErrorAction SilentlyContinue
+          Remove-Item "$env:USERPROFILE\.azd\update-check.json" -ErrorAction SilentlyContinue
+
+          azd update
+          echo "--- W2 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # W3 — Winget daily blocked
+      # Expected: error saying daily not available via winget
+      # ═══════════════════════════════════════════════════
+      - name: "W3: Rebuild fake version"
+        working-directory: cli/azd
+        run: |
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=${{ env.FAKE_VERSION }}'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+
+      - name: "W3: Winget daily blocked"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
+          azd config set alpha.update on
+
+          # Simulate winget install
+          echo "winget" | Out-File -NoNewline "$env:USERPROFILE\azd-test\.installed-by.txt"
+
+          $output = azd update --channel daily 2>&1 | Out-String
+          $global:LASTEXITCODE = 0
+          echo $output
+
+          if ($output -match "daily builds aren't available via winget") { echo "PASS" } else { echo "FAIL"; exit 1 }
+
+          # Cleanup marker
+          Remove-Item "$env:USERPROFILE\azd-test\.installed-by.txt" -ErrorAction SilentlyContinue
+          echo "--- W3 DONE ---"
+
+      # ═══════════════════════════════════════════════════
+      # W4 — Choco update (delegates to choco)
+      # Simulated: create .installed-by.txt with "choco"
+      # Expected: "Updating azd via choco..." → runs choco upgrade
+      # ═══════════════════════════════════════════════════
+      - name: "W4: Rebuild fake version"
+        working-directory: cli/azd
+        run: |
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=${{ env.FAKE_VERSION }}'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+
+      - name: "W4: Choco update delegation"
+        run: |
+          Remove-Item env:CI, env:GITHUB_ACTIONS, env:TF_BUILD -ErrorAction SilentlyContinue
+          azd config set alpha.update on
+
+          # Simulate choco install by creating marker file
+          echo "choco" | Out-File -NoNewline "$env:USERPROFILE\azd-test\.installed-by.txt"
+          echo "Created .installed-by.txt with 'choco'"
+
+          $output = azd update 2>&1 | Out-String
+          $global:LASTEXITCODE = 0
+          echo $output
+
+          # Cleanup marker
+          Remove-Item "$env:USERPROFILE\azd-test\.installed-by.txt" -ErrorAction SilentlyContinue
+          echo "--- W4 DONE ---"
