@@ -1,0 +1,180 @@
+name: "Test: azd update on Windows"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-update-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Build azd as fake old version
+        working-directory: cli/azd
+        run: |
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+          echo "$env:USERPROFILE\azd-test" | Out-File -Append $env:GITHUB_PATH
+
+      - name: A1 - Version check shows update available
+        run: |
+          azd config set update.autoUpdate off
+          azd version
+          echo "--- Expected: WARNING about newer stable version ---"
+
+      - name: A2 - azd update (stable channel)
+        run: |
+          azd config set alpha.update on
+          azd update
+          azd version
+          echo "--- Expected: updated to latest stable ---"
+
+      - name: Rebuild fake old version for remaining tests
+        working-directory: cli/azd
+        run: |
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+
+      - name: A3 - azd update already up to date
+        run: |
+          azd config set alpha.update on
+          azd config set update.autoUpdate off
+          # First update to latest
+          azd update
+          # Then try again
+          azd update
+          echo "--- Expected: azd is up to date ---"
+
+      - name: Rebuild fake old version
+        working-directory: cli/azd
+        run: |
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+
+      - name: A7 - Config auto-update on
+        run: |
+          azd config set alpha.update on
+          azd update --auto-update on
+          azd config list
+          echo "--- Expected: update.autoUpdate = on ---"
+
+      - name: A8 - Config auto-update off
+        run: |
+          azd update --auto-update off
+          azd config list
+          echo "--- Expected: update.autoUpdate = off ---"
+
+      - name: A10 - Alpha auto-enable
+        run: |
+          azd config unset alpha.update 2>$null
+          azd update
+          azd config list
+          echo "--- Expected: alpha.update auto-enabled, notice shown ---"
+
+      - name: A11 - Channel validation
+        run: |
+          azd config set alpha.update on
+          azd update --channel invalid 2>&1 || true
+          echo "--- Expected: error about invalid channel ---"
+
+      - name: C1 - Auto-stage and apply
+        run: |
+          # Rebuild fake old version
+          cd cli/azd
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+          cd ../..
+
+          # Enable auto-update, clean staging
+          azd config set alpha.update on
+          azd config set update.autoUpdate on
+          Remove-Item -Recurse -Force "$env:USERPROFILE\.azd\staging" -ErrorAction SilentlyContinue
+
+          # Trigger background staging
+          azd version
+          Start-Sleep -Seconds 15
+
+          # Check if staging happened
+          if (Test-Path "$env:USERPROFILE\.azd\staging\azd.exe") {
+            echo "Staging: OK"
+            Get-Item "$env:USERPROFILE\.azd\staging\azd.exe" | Select-Object Length
+          } else {
+            echo "Staging: NOT FOUND (may need more time)"
+          }
+
+          # Apply on next run
+          azd version
+          echo "--- Expected: updated version after apply ---"
+
+      - name: C3 - Corrupt staging recovery
+        run: |
+          # Rebuild fake old version
+          cd cli/azd
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+          cd ../..
+
+          azd config set alpha.update on
+          azd config set update.autoUpdate on
+
+          # Create corrupt staged binary
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\.azd\staging"
+          echo "corrupt" | Out-File "$env:USERPROFILE\.azd\staging\azd.exe"
+
+          # Should detect corruption and re-stage
+          azd version
+          Start-Sleep -Seconds 15
+          if (Test-Path "$env:USERPROFILE\.azd\staging\azd.exe") {
+            $size = (Get-Item "$env:USERPROFILE\.azd\staging\azd.exe").Length
+            echo "Re-staged binary size: $size bytes"
+          }
+          echo "--- Expected: corrupt file detected, valid binary re-staged ---"
+
+      - name: C4 - Auto-update disabled skips staging
+        run: |
+          azd config set alpha.update on
+          azd config set update.autoUpdate off
+          Remove-Item -Recurse -Force "$env:USERPROFILE\.azd\staging" -ErrorAction SilentlyContinue
+          azd version
+          Start-Sleep -Seconds 5
+          if (Test-Path "$env:USERPROFILE\.azd\staging") {
+            echo "FAIL: staging directory should not exist"
+          } else {
+            echo "PASS: no staging when auto-update is off"
+          }
+
+      - name: D1 - Package manager detection
+        run: |
+          azd config set alpha.update on
+          # On GH runners, azd is not installed via winget/choco, so this tests the non-pkg-manager path
+          echo "Install method detection:"
+          azd version --debug 2>&1 | Select-String -Pattern "package.manager|install" || echo "(no package manager detected)"
+          echo "--- Expected: no package manager detected on GH runner ---"
+
+      - name: D2 - Windows MSI/Authenticode info
+        run: |
+          # Check if the downloaded binary would be signed
+          azd config set alpha.update on
+          azd config set update.autoUpdate on
+          Remove-Item -Recurse -Force "$env:USERPROFILE\.azd\staging" -ErrorAction SilentlyContinue
+
+          # Trigger staging
+          cd cli/azd
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
+          cd ../..
+
+          azd version
+          Start-Sleep -Seconds 15
+
+          if (Test-Path "$env:USERPROFILE\.azd\staging\azd.exe") {
+            echo "Checking Authenticode signature on staged binary:"
+            Get-AuthenticodeSignature "$env:USERPROFILE\.azd\staging\azd.exe" | Format-List
+          } else {
+            echo "No staged binary to check"
+          }
+          echo "--- Expected: Valid Authenticode signature from Microsoft ---"
