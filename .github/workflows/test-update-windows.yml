@@ -16,7 +16,7 @@ jobs:
       - name: Build azd as fake old version
         working-directory: cli/azd
         run: |
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
           New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
           echo "$env:USERPROFILE\azd-test" | Out-File -Append $env:GITHUB_PATH
@@ -37,7 +37,7 @@ jobs:
       - name: Rebuild fake old version for remaining tests
         working-directory: cli/azd
         run: |
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
           New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
 
@@ -54,7 +54,7 @@ jobs:
       - name: Rebuild fake old version
         working-directory: cli/azd
         run: |
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
           New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
 
@@ -88,7 +88,7 @@ jobs:
         run: |
           # Rebuild fake old version
           cd cli/azd
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
           New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
           cd ../..
@@ -118,7 +118,7 @@ jobs:
         run: |
           # Rebuild fake old version
           cd cli/azd
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
           New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
           cd ../..
@@ -169,7 +169,7 @@ jobs:
 
           # Trigger staging
           cd cli/azd
-          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5'" -o azd.exe .
+          go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
           New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
           cd ../..
