@@ -6,10 +6,6 @@ on:
 jobs:
   test-update-windows:
     runs-on: windows-latest
-    env:
-      CI: ""
-      GITHUB_ACTIONS: ""
-      TF_BUILD: ""
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +16,10 @@ jobs:
       - name: Build azd as fake old version
         working-directory: cli/azd
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
           New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
@@ -27,12 +27,20 @@ jobs:
 
       - name: A1 - Version check shows update available
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           azd config set update.autoUpdate off
           azd version
           echo "--- Expected: WARNING about newer stable version ---"
 
       - name: A2 - azd update (stable channel)
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           azd config set alpha.update on
           azd update
           azd version
@@ -41,12 +49,20 @@ jobs:
       - name: Rebuild fake old version for remaining tests
         working-directory: cli/azd
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
           New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
 
       - name: A3 - azd update already up to date
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           azd config set alpha.update on
           azd config set update.autoUpdate off
           # First update to latest
@@ -58,12 +74,20 @@ jobs:
       - name: Rebuild fake old version
         working-directory: cli/azd
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
           New-Item -ItemType Directory -Force "$env:USERPROFILE\azd-test" | Out-Null
           Copy-Item azd.exe "$env:USERPROFILE\azd-test\azd.exe" -Force
 
       - name: A7 - Config auto-update on
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           azd config set alpha.update on
           azd update --auto-update on
           azd config list
@@ -71,12 +95,20 @@ jobs:
 
       - name: A8 - Config auto-update off
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           azd update --auto-update off
           azd config list
           echo "--- Expected: update.autoUpdate = off ---"
 
       - name: A10 - Alpha auto-enable
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           azd config unset alpha.update 2>$null
           azd update
           azd config list
@@ -84,12 +116,20 @@ jobs:
 
       - name: A11 - Channel validation
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           azd config set alpha.update on
           azd update --channel invalid 2>&1 || true
           echo "--- Expected: error about invalid channel ---"
 
       - name: C1 - Auto-stage and apply
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           # Rebuild fake old version
           cd cli/azd
           go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
@@ -120,6 +160,10 @@ jobs:
 
       - name: C3 - Corrupt staging recovery
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           # Rebuild fake old version
           cd cli/azd
           go build -ldflags "-X 'github.com/azure/azure-dev/cli/azd/internal.Version=1.23.5 (commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)'" -o azd.exe .
@@ -145,6 +189,10 @@ jobs:
 
       - name: C4 - Auto-update disabled skips staging
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           azd config set alpha.update on
           azd config set update.autoUpdate off
           Remove-Item -Recurse -Force "$env:USERPROFILE\.azd\staging" -ErrorAction SilentlyContinue
@@ -158,6 +206,10 @@ jobs:
 
       - name: D1 - Package manager detection
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           azd config set alpha.update on
           # On GH runners, azd is not installed via winget/choco, so this tests the non-pkg-manager path
           echo "Install method detection:"
@@ -166,6 +218,10 @@ jobs:
 
       - name: D2 - Windows MSI/Authenticode info
         run: |
+          Remove-Item env:CI -ErrorAction SilentlyContinue
+          Remove-Item env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+          Remove-Item env:TF_BUILD -ErrorAction SilentlyContinue
+          Remove-Item env:BUILD_ID -ErrorAction SilentlyContinue
           # Check if the downloaded binary would be signed
           azd config set alpha.update on
           azd config set update.autoUpdate on
