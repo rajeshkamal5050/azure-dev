@@ -67,6 +67,8 @@ type KeyVaultService interface {
 		subscriptionId string,
 		vaultName string,
 	) ([]string, error)
+	ListDeletedVaults(ctx context.Context, subscriptionId string) ([]DeletedVault, error)
+	GetDeletedVault(ctx context.Context, subscriptionId string, vaultName string, location string) (*DeletedVault, error)
 	CreateKeyVaultSecret(
 		ctx context.Context,
 		subscriptionId string,
@@ -263,6 +265,12 @@ type Vault struct {
 	Name string
 }
 
+// DeletedVault represents a soft-deleted key vault in the subscription.
+type DeletedVault struct {
+	Name     string
+	Location string
+}
+
 func (kvs *keyVaultService) ListSubscriptionVaults(
 	ctx context.Context,
 	subscriptionId string,
@@ -286,6 +294,67 @@ func (kvs *keyVaultService) ListSubscriptionVaults(
 		}
 	}
 	return result, nil
+}
+
+// ListDeletedVaults returns all soft-deleted key vaults in the subscription.
+func (kvs *keyVaultService) ListDeletedVaults(
+	ctx context.Context, subscriptionId string,
+) ([]DeletedVault, error) {
+	client, err := kvs.createKeyVaultClient(ctx, subscriptionId)
+	if err != nil {
+		return nil, fmt.Errorf("creating key vault client: %w", err)
+	}
+
+	var result []DeletedVault
+	pager := client.NewListDeletedPager(nil)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing deleted vaults: %w", err)
+		}
+		for _, vault := range page.Value {
+			name := ""
+			if vault.Name != nil {
+				name = *vault.Name
+			}
+			location := ""
+			if vault.Properties != nil && vault.Properties.Location != nil {
+				location = *vault.Properties.Location
+			}
+			result = append(result, DeletedVault{Name: name, Location: location})
+		}
+	}
+	return result, nil
+}
+
+// GetDeletedVault checks whether a specific soft-deleted vault exists by name and location.
+// Returns nil (not an error) when the vault is not found (404).
+func (kvs *keyVaultService) GetDeletedVault(
+	ctx context.Context, subscriptionId string, vaultName string, location string,
+) (*DeletedVault, error) {
+	client, err := kvs.createKeyVaultClient(ctx, subscriptionId)
+	if err != nil {
+		return nil, fmt.Errorf("creating key vault client: %w", err)
+	}
+
+	resp, err := client.GetDeleted(ctx, vaultName, location, nil)
+	if err != nil {
+		var respErr *azcore.ResponseError
+		if errors.As(err, &respErr) && respErr.StatusCode == 404 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting deleted vault %q: %w", vaultName, err)
+	}
+
+	name := ""
+	if resp.Name != nil {
+		name = *resp.Name
+	}
+	loc := ""
+	if resp.Properties != nil && resp.Properties.Location != nil {
+		loc = *resp.Properties.Location
+	}
+	return &DeletedVault{Name: name, Location: loc}, nil
 }
 
 func (kvs *keyVaultService) CreateVault(

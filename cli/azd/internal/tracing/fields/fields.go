@@ -621,3 +621,55 @@ var (
 		Purpose:        FeatureInsight,
 	}
 )
+
+// Local preflight validation related fields
+var (
+	// Number of preflight checks that were executed.
+	LocalPreflightChecksTotal = AttributeKey{
+		Key:            attribute.Key("local_preflight.checks.total"),
+		Classification: SystemMetadata,
+		Purpose:        FeatureInsight,
+	}
+	// Number of preflight warnings found.
+	LocalPreflightWarningsTotal = AttributeKey{
+		Key:            attribute.Key("local_preflight.warnings.total"),
+		Classification: SystemMetadata,
+		Purpose:        FeatureInsight,
+	}
+	// Number of preflight errors found.
+	LocalPreflightErrorsTotal = AttributeKey{
+		Key:            attribute.Key("local_preflight.errors.total"),
+		Classification: SystemMetadata,
+		Purpose:        FeatureInsight,
+	}
+	// Whether the user proceeded past warnings (true) or aborted (false).
+	LocalPreflightWarningsProceeded = AttributeKey{
+		Key:            attribute.Key("local_preflight.warnings.proceeded"),
+		Classification: SystemMetadata,
+		Purpose:        FeatureInsight,
+	}
+	// The error code from the first preflight error, if any.
+	LocalPreflightErrorCode = AttributeKey{
+		Key:            attribute.Key("local_preflight.error.code"),
+		Classification: SystemMetadata,
+		Purpose:        PerformanceAndHealth,
+	}
+	// Whether the interactive model fix prompt was shown to the user.
+	LocalPreflightFixOffered = AttributeKey{
+		Key:            attribute.Key("local_preflight.fix.offered"),
+		Classification: SystemMetadata,
+		Purpose:        FeatureInsight,
+	}
+	// Whether the user accepted the interactive fix prompt.
+	LocalPreflightFixAccepted = AttributeKey{
+		Key:            attribute.Key("local_preflight.fix.accepted"),
+		Classification: SystemMetadata,
+		Purpose:        FeatureInsight,
+	}
+	// Whether the interactive fix was successfully applied and triggered a retry.
+	LocalPreflightFixApplied = AttributeKey{
+		Key:            attribute.Key("local_preflight.fix.applied"),
+		Classification: SystemMetadata,
+		Purpose:        FeatureInsight,
+	}
+)

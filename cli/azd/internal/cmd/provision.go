@@ -424,6 +424,15 @@ func (p *ProvisionAction) Run(ctx context.Context) (*actions.ActionResult, error
 			}, nil
 		}
 
+		if deployResult.SkippedReason == provisioning.PreflightAbortedSkipped {
+			// Preflight detected fatal issues and aborted. Message already printed by the provider.
+			return &actions.ActionResult{
+				Message: &actions.ResultMessage{
+					Header: "Provisioning was aborted due to preflight validation errors.",
+				},
+			}, nil
+		}
+
 		skipped := deployResult.SkippedReason == provisioning.DeploymentStateSkipped
 		allSkipped = allSkipped && skipped
 		if skipped {

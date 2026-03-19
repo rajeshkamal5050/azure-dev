@@ -157,6 +157,19 @@ type armTemplateCopy struct {
 	BatchSize *int   `json:"batchSize,omitempty"` // used when mode is "serial"
 }
 
+// armCognitiveDeploymentProperties represents the properties block of a
+// Microsoft.CognitiveServices/accounts/deployments resource in a Bicep snapshot.
+type armCognitiveDeploymentProperties struct {
+	Model armCognitiveModelReference `json:"model"`
+}
+
+// armCognitiveModelReference identifies the AI model used by a cognitive deployment.
+type armCognitiveModelReference struct {
+	Format  string `json:"format"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
 // armTemplateVariable represents a variable value in the template. Variables can hold any JSON type.
 type armTemplateVariable = json.RawMessage
 
@@ -255,8 +268,10 @@ type armTemplate struct {
 type PreflightCheckSeverity int
 
 const (
+	// PreflightCheckSuccess indicates the check passed with no issues found.
+	PreflightCheckSuccess PreflightCheckSeverity = iota
 	// PreflightCheckWarning indicates a non-blocking issue that should be reported to the user.
-	PreflightCheckWarning PreflightCheckSeverity = iota
+	PreflightCheckWarning
 	// PreflightCheckError indicates a blocking issue that should prevent deployment.
 	PreflightCheckError
 )
@@ -265,6 +280,9 @@ const (
 type PreflightCheckResult struct {
 	// Severity indicates whether this result is a warning or a blocking error.
 	Severity PreflightCheckSeverity
+	// Code is a machine-readable identifier for the check outcome (e.g. "local_preflight.model_not_available").
+	// Empty for checks that do not define a specific code.
+	Code string
 	// Message is a human-readable description of the finding.
 	Message string
 }
@@ -547,6 +565,12 @@ type resourcesProperties struct {
 	// HasRoleAssignments indicates whether the deployment includes one or more
 	// Microsoft.Authorization/roleAssignments resources.
 	HasRoleAssignments bool
+	// HasCognitiveDeployments indicates whether the deployment includes one or more
+	// Microsoft.CognitiveServices/accounts/deployments resources (AI model deployments).
+	HasCognitiveDeployments bool
+	// HasKeyVaults indicates whether the deployment includes one or more
+	// Microsoft.KeyVault/vaults resources.
+	HasKeyVaults bool
 }
 
 // analyzeResources inspects the list of snapshot resources and returns a resourcesProperties
@@ -554,9 +578,13 @@ type resourcesProperties struct {
 func analyzeResources(resources []armTemplateResource) resourcesProperties {
 	props := resourcesProperties{}
 	for _, r := range resources {
-		if strings.EqualFold(r.Type, "Microsoft.Authorization/roleAssignments") {
+		switch {
+		case strings.EqualFold(r.Type, "Microsoft.Authorization/roleAssignments"):
 			props.HasRoleAssignments = true
-			break
+		case strings.EqualFold(r.Type, "Microsoft.CognitiveServices/accounts/deployments"):
+			props.HasCognitiveDeployments = true
+		case strings.EqualFold(r.Type, "Microsoft.KeyVault/vaults"):
+			props.HasKeyVaults = true
 		}
 	}
 	return props

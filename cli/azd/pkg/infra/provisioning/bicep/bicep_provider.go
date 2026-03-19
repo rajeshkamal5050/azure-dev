@@ -45,6 +45,9 @@ import (
 	"github.com/azure/azure-dev/cli/azd/pkg/password"
 	"github.com/azure/azure-dev/cli/azd/pkg/prompt"
 	"github.com/azure/azure-dev/cli/azd/pkg/tools/bicep"
+
+	"github.com/azure/azure-dev/cli/azd/internal/tracing"
+	"github.com/azure/azure-dev/cli/azd/internal/tracing/fields"
 	"github.com/drone/envsubst"
 )
 
@@ -85,11 +88,16 @@ type BicepProvider struct {
 	keyvaultService     keyvault.KeyVaultService
 	subscriptionManager *account.SubscriptionsManager
 	aiModelService      *ai.AiModelService
+	locationService     *azapi.ResourceTypeLocationService
 	serviceLocator      ioc.ServiceLocator
 
 	// Internal state
 	// compileBicepResult is cached to avoid recompiling the same bicep file multiple times in the same azd run.
 	compileBicepMemoryCache *compileBicepResult
+
+	// modelDeploymentFailures holds structured failure data from the most recent model deployment check.
+	// Populated by checkModelDeployments during preflight, consumed by the interactive fix flow.
+	modelDeploymentFailures []ModelDeploymentFailure
 }
 
 // Name gets the name of the infra provider
@@ -164,7 +172,7 @@ func (p *BicepProvider) EnsureEnv(ctx context.Context) error {
 			return err
 		}
 
-		_, err = p.ensureParameters(ctx, compileResult.Template)
+		_, _, err = p.ensureParameters(ctx, compileResult.Template)
 		if err != nil {
 			return err
 		}
@@ -428,12 +436,13 @@ func (p *BicepProvider) plan(ctx context.Context) (*compileBicepResult, error) {
 		}
 
 		// prompt for any missing parameters
-		configuredParameters, err := p.ensureParameters(ctx, compileResult.Template)
+		configuredParameters, envMapping, err := p.ensureParameters(ctx, compileResult.Template)
 		if err != nil {
 			return nil, err
 		}
 
 		compileResult.Parameters = configuredParameters
+		compileResult.EnvMapping = envMapping
 		return compileResult, nil
 
 	case bicepparamMode:
@@ -694,27 +703,52 @@ func (p *BicepProvider) Deploy(ctx context.Context) (*provisioning.DeployResult,
 	}
 
 	if !skipPreflight {
-		p.console.ShowSpinner(ctx, "Validating deployment", input.Step)
-		abort, preflightErr := p.validatePreflight(
-			ctx,
-			deployment,
-			p.path,
-			planned.RawArmTemplate,
-			planned.Parameters,
-			deploymentTags,
-			optionsMap,
-		)
-		if preflightErr != nil {
-			p.console.StopSpinner(ctx, "Validating deployment", input.StepFailed)
-			return nil, preflightErr
+		const maxPreflightRetries = 3
+
+		for attempt := range maxPreflightRetries {
+			p.console.ShowSpinner(ctx, "Validating deployment", input.Step)
+			abort, retryNeeded, preflightErr := p.validatePreflight(
+				ctx,
+				deployment,
+				p.path,
+				planned.RawArmTemplate,
+				planned.Parameters,
+				planned.EnvMapping,
+				deploymentTags,
+				optionsMap,
+			)
+			if preflightErr != nil {
+				p.console.StopSpinner(ctx, "Validating deployment", input.StepFailed)
+				return nil, preflightErr
+			}
+			if abort {
+				p.console.StopSpinner(ctx, "Validating deployment", input.StepSkipped)
+				return &provisioning.DeployResult{SkippedReason: provisioning.PreflightAbortedSkipped}, nil
+			}
+			if retryNeeded && attempt < maxPreflightRetries-1 {
+				// User fixed values interactively — re-plan with updated env vars.
+				p.console.StopSpinner(ctx, "", input.StepDone)
+				p.compileBicepMemoryCache = nil
+				planned, err = p.plan(ctx)
+				if err != nil {
+					return nil, err
+				}
+				deployment, err = p.generateDeploymentObject(planned)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+			p.console.StopSpinner(ctx, "", input.StepDone)
+			break
 		}
-		if abort {
-			// Preflight detected issues and the deployment was intentionally aborted.
-			// This is a successful operation (exit code 0), not an internal failure.
-			p.console.StopSpinner(ctx, "Validating deployment", input.StepSkipped)
-			return &provisioning.DeployResult{SkippedReason: provisioning.PreflightAbortedSkipped}, nil
-		}
-		p.console.StopSpinner(ctx, "", input.StepDone)
+	}
+
+	// DEV-ONLY: Stop after preflight checks when AZD_PREFLIGHT_ONLY is set.
+	// This prevents actual ARM deployment during manual testing of preflight checks.
+	// Remove this block before merging to main.
+	if os.Getenv("AZD_PREFLIGHT_ONLY") != "" {
+		return &provisioning.DeployResult{SkippedReason: provisioning.PreflightAbortedSkipped}, nil
 	}
 
 	progressCtx, cancelProgress := context.WithCancel(ctx)
@@ -1960,6 +1994,9 @@ type compileBicepResult struct {
 	Template       azure.ArmTemplate
 	// Parameters are populated either by compiling a .bicepparam (automatically) or by azd after compiling a .bicep file.
 	Parameters azure.ArmParameters
+	// EnvMapping maps ARM parameter names to the environment variable name(s) they reference.
+	// Populated only in bicepMode via loadParameters(). nil for bicepparamMode.
+	EnvMapping map[string][]string
 }
 
 // compileBicep compiles the bicep module at the given path and returns the compiled ARM template and parameters.
@@ -2143,9 +2180,10 @@ func (p *BicepProvider) validatePreflight(
 	modulePath string,
 	armTemplate azure.RawArmTemplate,
 	armParameters azure.ArmParameters,
+	envMapping map[string][]string,
 	tags map[string]*string,
 	options map[string]any,
-) (bool, error) {
+) (abort bool, retry bool, err error) {
 	// Run local preflight validation before sending to Azure.
 	// Local validation catches common issues without requiring a network round-trip.
 	localPreflight := newLocalArmPreflight(modulePath, p.bicepCli, target)
@@ -2156,28 +2194,95 @@ func (p *BicepProvider) validatePreflight(
 	// principal has the required write permission.
 	localPreflight.AddCheck(p.checkRoleAssignmentPermissions)
 
-	results, err := localPreflight.validate(ctx, p.console, armTemplate, armParameters)
-	if err != nil {
-		return false, fmt.Errorf("local preflight validation failed: %w", err)
+	// Register the location availability check. It verifies that each resource in
+	// the snapshot is being deployed to a location where its resource type is available.
+	localPreflight.AddCheck(p.checkResourceLocations)
+
+	// Register the soft-delete detection check. It warns when a Key Vault name in
+	// the snapshot conflicts with an existing soft-deleted vault in the subscription.
+	localPreflight.AddCheck(p.checkSoftDeletedVaults)
+
+	// Register the model deployment availability check last. It verifies that each
+	// CognitiveServices model deployment references a valid model, version, and SKU.
+	// Placed last because it's the only check that offers interactive fixes — users
+	// see all non-fixable warnings/errors first, then get the fix prompt.
+	localPreflight.AddCheck(p.checkModelDeployments)
+
+	p.modelDeploymentFailures = nil
+	results, validateErr := localPreflight.validate(ctx, p.console, armTemplate, armParameters)
+	if validateErr != nil {
+		return false, false, fmt.Errorf("local preflight validation failed: %w", validateErr)
+	}
+
+	// Emit preflight telemetry.
+	warningCount := 0
+	errorCount := 0
+	firstErrorCode := ""
+	for _, result := range results {
+		switch result.Severity {
+		case PreflightCheckWarning:
+			warningCount++
+		case PreflightCheckError:
+			errorCount++
+			if firstErrorCode == "" && result.Code != "" {
+				firstErrorCode = result.Code
+			}
+		}
+	}
+	tracing.SetUsageAttributes(
+		fields.LocalPreflightChecksTotal.Int(len(results)),
+		fields.LocalPreflightWarningsTotal.Int(warningCount),
+		fields.LocalPreflightErrorsTotal.Int(errorCount),
+	)
+	if firstErrorCode != "" {
+		tracing.SetUsageAttributes(fields.LocalPreflightErrorCode.String(firstErrorCode))
 	}
 
 	// Build a UX report from the preflight results and display it.
 	if len(results) > 0 {
 		report := &ux.PreflightReport{}
 		for _, result := range results {
+			var severity ux.PreflightReportSeverity
+			switch result.Severity {
+			case PreflightCheckSuccess:
+				severity = ux.PreflightReportSuccess
+			case PreflightCheckError:
+				severity = ux.PreflightReportError
+			default:
+				severity = ux.PreflightReportWarning
+			}
 			report.Items = append(report.Items, ux.PreflightReportItem{
-				IsError: result.Severity == PreflightCheckError,
-				Message: result.Message,
+				Severity: severity,
+				Message:  result.Message,
 			})
 		}
 		p.console.MessageUxItem(ctx, report)
 
 		if report.HasErrors() {
+			// Validate → Fix → Retry pattern:
+			// Each check may produce fixable errors. Fix handlers are invoked in order;
+			// if any fix is applied, we signal retry so the caller re-plans and re-validates.
+			// To add a new fixable check:
+			//   1. Store failures in a provider field (e.g. p.myFailures) during the check
+			//   2. Add a fix handler block here following the same pattern
+			//   3. Return (false, true, nil) to signal retry after a successful fix
+			if len(p.modelDeploymentFailures) > 0 && !p.console.IsNoPromptMode() && envMapping != nil {
+				tracing.SetUsageAttributes(fields.LocalPreflightFixOffered.Bool(true))
+				fixed, fixErr := p.offerModelDeploymentFixes(ctx, envMapping, armParameters)
+				if fixErr != nil {
+					return false, false, fixErr
+				}
+				tracing.SetUsageAttributes(fields.LocalPreflightFixApplied.Bool(fixed))
+				if fixed {
+					return false, true, nil
+				}
+			}
+
 			// Errors were already displayed by the UX report above. The validation
 			// successfully detected problems and the deployment is intentionally aborted.
 			// This is not an internal failure, so no error is returned (exit code 0).
 			p.console.Message(ctx, "Preflight validation detected errors, deployment aborted.")
-			return true, nil
+			return true, false, nil
 		}
 
 		if report.HasWarnings() {
@@ -2187,16 +2292,26 @@ func (p *BicepProvider) validatePreflight(
 				DefaultValue: true,
 			})
 			if promptErr != nil {
-				return false, fmt.Errorf("prompting for preflight confirmation: %w", promptErr)
+				return false, false, fmt.Errorf("prompting for preflight confirmation: %w", promptErr)
 			}
 			if !continueDeployment {
+				tracing.SetUsageAttributes(fields.LocalPreflightWarningsProceeded.Bool(false))
 				// User chose not to continue — this is an intentional abort, not a failure.
-				return true, nil
+				return true, false, nil
 			}
+			tracing.SetUsageAttributes(fields.LocalPreflightWarningsProceeded.Bool(true))
 		}
 	}
 
-	return false, target.ValidatePreflight(ctx, armTemplate, armParameters, tags, options)
+	// DEV-ONLY: Skip ARM server-side validation when AZD_PREFLIGHT_ONLY is set.
+	// This isolates local preflight checks during manual testing.
+	// Remove this block before merging to main.
+	if os.Getenv("AZD_PREFLIGHT_ONLY") != "" {
+		fmt.Println("AZD_PREFLIGHT_ONLY is set — skipping ARM server-side validation.")
+		return false, false, nil
+	}
+
+	return false, false, target.ValidatePreflight(ctx, armTemplate, armParameters, tags, options)
 }
 
 // checkRoleAssignmentPermissions is a PreflightCheckFn that verifies the current principal
@@ -2252,7 +2367,88 @@ func (p *BicepProvider) checkRoleAssignmentPermissions(
 		}, nil
 	}
 
-	return nil, nil
+	return &PreflightCheckResult{
+		Severity: PreflightCheckSuccess,
+		Message:  "Role assignment permissions verified.",
+	}, nil
+}
+
+// checkResourceLocations is a PreflightCheckFn that verifies each resource in the snapshot
+// is being deployed to a location where its resource type is available.
+func (p *BicepProvider) checkResourceLocations(
+	ctx context.Context, valCtx *validationContext,
+) (*PreflightCheckResult, error) {
+	if p.locationService == nil {
+		log.Printf("local preflight: location service not available, skipping location check")
+		return nil, nil
+	}
+
+	return checkResourceLocationAvailability(
+		ctx,
+		valCtx.SnapshotResources,
+		p.env.GetSubscriptionId(),
+		p.locationService.GetLocations,
+		p.buildDisplayToCanonicalMap,
+	)
+}
+
+// buildDisplayToCanonicalMap returns a map from lowercase display name to canonical location name
+// by querying the Subscriptions API (e.g. "east us 2" → "eastus2").
+func (p *BicepProvider) buildDisplayToCanonicalMap(
+	ctx context.Context, subscriptionID string,
+) (map[string]string, error) {
+	locations, err := p.subscriptionManager.GetLocations(ctx, subscriptionID)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(locations))
+	for _, loc := range locations {
+		m[strings.ToLower(loc.DisplayName)] = loc.Name
+	}
+	return m, nil
+}
+
+// checkModelDeployments is a PreflightCheckFn that verifies each CognitiveServices model
+// deployment in the snapshot references a valid model name, version, and SKU.
+func (p *BicepProvider) checkModelDeployments(
+	ctx context.Context, valCtx *validationContext,
+) (*PreflightCheckResult, error) {
+	if !valCtx.Props.HasCognitiveDeployments {
+		return nil, nil
+	}
+
+	if p.aiModelService == nil {
+		log.Printf("local preflight: AI model service not available, skipping model check")
+		return nil, nil
+	}
+
+	result, failures, err := checkModelDeploymentAvailability(
+		ctx,
+		valCtx.SnapshotResources,
+		p.env.GetSubscriptionId(),
+		p.aiModelService.ListModels,
+		p.aiModelService.ListUsages,
+	)
+	p.modelDeploymentFailures = failures
+	return result, err
+}
+
+// checkSoftDeletedVaults is a PreflightCheckFn that detects when a Key Vault name in the
+// snapshot conflicts with an existing soft-deleted vault in the subscription.
+func (p *BicepProvider) checkSoftDeletedVaults(
+	ctx context.Context, valCtx *validationContext,
+) (*PreflightCheckResult, error) {
+	if !valCtx.Props.HasKeyVaults {
+		return nil, nil
+	}
+
+	return checkSoftDeletedResources(
+		ctx,
+		valCtx.SnapshotResources,
+		p.env.GetSubscriptionId(),
+		p.env.GetLocation(),
+		p.keyvaultService.GetDeletedVault,
+	)
 }
 
 // Deploys the specified Bicep module and parameters with the selected provisioning scope (subscription vs resource group)
@@ -2327,14 +2523,14 @@ func inputsParameter(
 func (p *BicepProvider) ensureParameters(
 	ctx context.Context,
 	template azure.ArmTemplate,
-) (azure.ArmParameters, error) {
+) (azure.ArmParameters, map[string][]string, error) {
 	//snapshot the AZURE_LOCATIOn in azd env if it is set in System env
 	locationSystemEnv, hasLocation := os.LookupEnv(environment.LocationEnvVarName)
 	_, hasAzdLocation := p.env.Dotenv()[environment.LocationEnvVarName]
 	if hasLocation && !hasAzdLocation && locationSystemEnv != "" {
 		p.env.SetLocation(locationSystemEnv)
 		if err := p.envManager.Save(ctx, p.env); err != nil {
-			return nil, fmt.Errorf("saving location to .env: %w", err)
+			return nil, nil, fmt.Errorf("saving location to .env: %w", err)
 		}
 	}
 	// using loadParameters to resolve the parameters file (usually main.parameters.json)
@@ -2342,13 +2538,13 @@ func (p *BicepProvider) ensureParameters(
 	// Parameters mapped to env vars that are not set in the environment are removed from the parameters file
 	parametersResult, err := p.loadParameters(ctx, &template)
 	if err != nil {
-		return nil, fmt.Errorf("resolving bicep parameters file: %w", err)
+		return nil, nil, fmt.Errorf("resolving bicep parameters file: %w", err)
 	}
 	parameters := parametersResult.parameters
 	locationParameters := parametersResult.locationParams
 
 	if len(template.Parameters) == 0 {
-		return azure.ArmParameters{}, nil
+		return azure.ArmParameters{}, parametersResult.envMapping, nil
 	}
 	configuredParameters := make(azure.ArmParameters, len(template.Parameters))
 
@@ -2375,7 +2571,7 @@ func (p *BicepProvider) ensureParameters(
 				azdMetadata.Type = to.Ptr(azure.AzdMetadataTypeLocation)
 			}
 			if azdMetadata.Type != nil && *azdMetadata.Type != azure.AzdMetadataTypeLocation {
-				return nil, fmt.Errorf(
+				return nil, nil, fmt.Errorf(
 					"parameter %s is mapped to AZURE_LOCATION but has a different azd metadata type: %s."+
 						"Parameters mapped to AZURE_LOCATION can only be typed as location",
 					key,
@@ -2383,7 +2579,7 @@ func (p *BicepProvider) ensureParameters(
 			}
 			mdBytes, err := json.Marshal(azdMetadata)
 			if err != nil {
-				return nil, fmt.Errorf("marshalling azd metadata: %w", err)
+				return nil, nil, fmt.Errorf("marshalling azd metadata: %w", err)
 			}
 			if param.Metadata == nil {
 				param.Metadata = map[string]json.RawMessage{"azd": mdBytes}
@@ -2418,7 +2614,7 @@ func (p *BicepProvider) ensureParameters(
 					if keyvault.IsAzureKeyVaultSecret(stringValue) {
 						paramValue, err = p.keyvaultService.SecretFromAkvs(ctx, stringValue)
 						if err != nil {
-							return nil, err
+							return nil, nil, err
 						}
 					}
 				}
@@ -2465,7 +2661,7 @@ func (p *BicepProvider) ensureParameters(
 			// - generate once
 			genValue, err := autoGenerate(key, azdMetadata)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			configuredParameters[key] = azure.ArmParameter{
 				Value: genValue,
@@ -2484,7 +2680,7 @@ func (p *BicepProvider) ensureParameters(
 
 	// If in no-prompt mode and there are missing parameters, return an error with all missing inputs
 	if len(parameterPrompts) > 0 && p.console.IsNoPromptMode() {
-		return nil, p.buildMissingInputsError(parameterPrompts, parametersResult.envMapping)
+		return nil, nil, p.buildMissingInputsError(parameterPrompts, parametersResult.envMapping)
 	}
 
 	if len(parameterPrompts) > 0 {
@@ -2502,7 +2698,7 @@ func (p *BicepProvider) ensureParameters(
 
 			values, err := p.console.PromptDialog(ctx, dialog)
 			if err != nil {
-				return nil, fmt.Errorf("prompting for values: %w", err)
+				return nil, nil, fmt.Errorf("prompting for values: %w", err)
 			}
 
 			for _, prompt := range parameterPrompts {
@@ -2521,7 +2717,7 @@ func (p *BicepProvider) ensureParameters(
 				// Otherwise, prompt for the value.
 				value, err := p.promptForParameter(ctx, key, prompt.param, locationParameters)
 				if err != nil {
-					return nil, fmt.Errorf("prompting for value: %w", err)
+					return nil, nil, fmt.Errorf("prompting for value: %w", err)
 				}
 
 				if key != "location" {
@@ -2539,10 +2735,10 @@ func (p *BicepProvider) ensureParameters(
 
 	if configModified {
 		if err := p.envManager.Save(ctx, p.env); err != nil {
-			return nil, fmt.Errorf("saving prompt values: %w", err)
+			return nil, nil, fmt.Errorf("saving prompt values: %w", err)
 		}
 	}
-	return configuredParameters, nil
+	return configuredParameters, parametersResult.envMapping, nil
 }
 
 var configInfraParametersKey = "infra.parameters."
@@ -2663,6 +2859,7 @@ func NewBicepProvider(
 	cloud *cloud.Cloud,
 	subscriptionManager *account.SubscriptionsManager,
 	aiModelService *ai.AiModelService,
+	locationService *azapi.ResourceTypeLocationService,
 	serviceLocator ioc.ServiceLocator,
 ) provisioning.Provider {
 	return &BicepProvider{
@@ -2680,6 +2877,7 @@ func NewBicepProvider(
 		portalUrlBase:       cloud.PortalUrlBase,
 		subscriptionManager: subscriptionManager,
 		aiModelService:      aiModelService,
+		locationService:     locationService,
 		serviceLocator:      serviceLocator,
 	}
 }
@@ -2701,7 +2899,7 @@ func (p *BicepProvider) Parameters(ctx context.Context) ([]provisioning.Paramete
 
 	// resolved parameters contains the final value for the parameters after evaluating. The final value can be
 	// from env var, from default value or from user input (prompt).
-	resolvedParams, err := p.ensureParameters(ctx, compileResult.Template)
+	resolvedParams, _, err := p.ensureParameters(ctx, compileResult.Template)
 	if err != nil {
 		return nil, fmt.Errorf("resolving parameters: %w", err)
 	}
