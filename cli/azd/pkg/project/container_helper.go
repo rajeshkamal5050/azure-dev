@@ -689,6 +689,18 @@ func (ch *ContainerHelper) publishLocalImage(
 			// image before we're able to push it to a remote registry
 			// In most cases this pull will have already been part of the package step
 			if sourceImage != "" && serviceConfig.RelativePath == "" {
+				// Skip pull-tag-push when the source image is already in the target registry.
+				// This happens when an extension (e.g., microsoft.aspire) has already pushed
+				// images to the same ACR that azd deploys to.
+				sourceContainer, parseErr := docker.ParseContainerImage(sourceImage)
+				if parseErr == nil && strings.EqualFold(sourceContainer.Registry, registryName) {
+					log.Printf(
+						"skipping pull-tag-push: source image '%s' is already in target registry '%s'\n",
+						sourceImage, registryName,
+					)
+					return sourceImage, nil
+				}
+
 				progress.SetProgress(NewServiceProgress("Pulling container image"))
 				err = ch.docker.Pull(ctx, sourceImage)
 				if err != nil {

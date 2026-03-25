@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../extension.schema.json
+id: microsoft.aspire
+namespace: aspire
+displayName: .NET Aspire (Preview)
+description: Extension for .NET Aspire cloud-ready applications. (Preview)
+usage: azd aspire <command> [options]
+# NOTE: Make sure version.txt is in sync with this version.
+version: 0.1.0-preview
+requiredAzdVersion: ">1.23.6"
+language: go
+capabilities:
+  - custom-commands
+  - lifecycle-events
+examples:
+  - name: init
+    description: Initialize an Aspire project for Azure deployment with azd.
+    usage: azd aspire init
